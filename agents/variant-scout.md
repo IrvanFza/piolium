@@ -24,7 +24,9 @@ Read the chamber's `debate.md` to understand:
    - The root cause pattern (e.g., "ObjectInputStream.readObject() without filter")
    - The affected code location
    - The detection approach used by the Tracer
-3. Also read `piolium/attack-pattern-registry.json` for patterns from other chambers
+3. Also read `piolium/attack-pattern-registry.json` if it exists — patterns from other
+   chambers. Treat a missing or empty registry as "no cross-chamber patterns yet" and
+   continue; never search outside the target repository for it.
 
 ## Variant Search Strategy
 

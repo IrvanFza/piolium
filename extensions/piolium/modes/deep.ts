@@ -40,6 +40,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } f
 import { join } from "node:path";
 import type { AgentRuntimeModel } from "../agent-runner.ts";
 import { type AgentDefinition, loadAgents } from "../agents.ts";
+import { ensureAttackPatternRegistry } from "../attack-pattern-registry.ts";
 import {
 	type AuditRunState,
 	applyPhaseStatus,
@@ -331,6 +332,7 @@ function buildTask(phase: string, cwd: string, hasGit: boolean): string {
 				"Do not delete weak drafts. Mark rejected drafts with frontmatter `status: rejected-fp` and `rejection_reason: <short reason>`.",
 				"Survivors get copied to `piolium/findings-draft/p10-NNN-<slug>.md` with frontmatter `status: valid` and normalised severity.",
 				"Write per-cluster transcripts under `piolium/chamber-workspace/<cluster-id>/debate.md` and an index at `piolium/chamber-workspace/index.md`.",
+				'Maintain `piolium/attack-pattern-registry.json` (already seeded as `{"patterns": []}`): append the root-cause pattern of each confirmed finding, with detection signatures. Leaving it empty is a valid outcome — do not delete the file, Stage 12 reads it.',
 			].join("\n\n");
 		case "P11":
 			return [
@@ -342,6 +344,7 @@ function buildTask(phase: string, cwd: string, hasGit: boolean): string {
 			return [
 				"You are running Stage 12 (Variant Search) of /piolium-deep.",
 				`For each surviving finding, search the codebase and \`${ATTACK_SURFACE_DIR}/\` for similar routes, sources, sinks, and flow patterns. Use the variant-analysis skill if available. Write new drafts \`piolium/findings-draft/p12-NNN-<slug>.md\` (id namespace p12) for each variant. Write \`${VARIANT_SUMMARY}\`.`,
+				"`piolium/attack-pattern-registry.json` seeds the search when it has entries, but an empty `patterns` array is a normal Stage 10 outcome — fall back to hunting from the finding drafts alone rather than treating it as an error.",
 			].join("\n\n");
 		case "P13":
 			return [
@@ -958,6 +961,12 @@ export async function runDeepAudit(opts: RunDeepOptions): Promise<RunDeepResult>
 			await runSequential("P9", () =>
 				runOne(cwd, audit, spec("P9"), recon.historyAvailable, signal, ui, opts.agentRuntime),
 			);
+			// P10 writes the cross-chamber pattern registry and P12 reads it as its
+			// primary input, but a chamber that confirms no new pattern leaves the
+			// file uncreated — and P10's gate checks the chamber index, not the
+			// registry. Seed it so P12 never hunts for a file that was never
+			// written. Re-seeded before P12 in case P10 removed it.
+			ensureAttackPatternRegistry(cwd);
 			await runSequential("P10", () =>
 				runOne(cwd, audit, spec("P10"), recon.historyAvailable, signal, ui, opts.agentRuntime),
 			);
@@ -968,6 +977,7 @@ export async function runDeepAudit(opts: RunDeepOptions): Promise<RunDeepResult>
 			await runSequential("P11", () =>
 				runOne(cwd, audit, spec("P11"), recon.historyAvailable, signal, ui, opts.agentRuntime),
 			);
+			ensureAttackPatternRegistry(cwd);
 			await runSequential("P12", () =>
 				runOne(cwd, audit, spec("P12"), recon.historyAvailable, signal, ui, opts.agentRuntime),
 			);

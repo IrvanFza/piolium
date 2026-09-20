@@ -256,7 +256,9 @@ After Phase 4 (SAST + inline enrichment) and Phase 9 (spec gap) complete:
 3. Each cluster becomes one Review Chamber (typical audit: 3-8 chambers)
 4. Priority: authentication/authorization first, then data ingestion, then API surface
 
-Create `piolium/chamber-workspace/` and `piolium/attack-pattern-registry.json`.
+Create `piolium/chamber-workspace/` and `piolium/attack-pattern-registry.json`. The orchestrator
+seeds the registry as `{"patterns": []}` before this phase — append to it, and do not delete it
+even when no chamber confirms a new pattern. Phase 12 reads it.
 
 ### Four Debate Roles
 
@@ -428,6 +430,10 @@ shape, not just the same syntax.
 patterns from Phase 10 Review Chambers. Each pattern includes `detection_signature` fields with
 ready-made CodeQL, grep, and Semgrep queries for automated variant hunting, plus
 `untested_candidates` identifying specific code locations to investigate.
+
+An empty `patterns` array is a normal Phase 10 outcome — chambers that confirm no new root-cause
+pattern write nothing. Fall back to hunting variants from the finding drafts alone. Never search
+outside the audit directory for the registry.
 
 Also read:
 - `## Phase 10 Addendum` in `piolium/attack-surface/knowledge-base-report.md` for attack surfaces discovered

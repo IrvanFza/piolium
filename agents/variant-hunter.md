@@ -19,8 +19,15 @@ You receive:
 
 ## Context Loading
 
+Every input below is optional. Read what exists under the audit directory and carry on
+without whatever does not — a chamber round that confirmed no new pattern legitimately
+leaves the registry empty or absent. **Never search outside the target repository for a
+missing input file.**
+
 1. Read the finding draft to understand the root cause and code pattern
-2. Read `piolium/attack-pattern-registry.json` — find the matching pattern entry
+2. Read `piolium/attack-pattern-registry.json` if it exists — find the matching pattern
+   entry. If the file is missing, empty, or has no entry for this pattern, skip the
+   registry-driven search below and hunt variants from the finding draft alone.
 3. Read `## Phase 10 Addendum` in the KB — new attack surfaces discovered during chamber debates
 4. Check `piolium/chamber-workspace/*/variant-candidates/` for pre-identified candidates
 5. Read `piolium/codeql-artifacts/entry-points.json` and `sinks.json` for structurally similar
@@ -100,7 +107,9 @@ Fields:
 - Include code path evidence
 
 Update `piolium/attack-pattern-registry.json` — append each confirmed variant to
-the pattern's `confirmed_instances`.
+the pattern's `confirmed_instances`. If the registry does not exist, create it as
+`{"patterns": []}` and add the pattern entry; if there is no entry for this pattern,
+append one.
 
 ## Completion
 

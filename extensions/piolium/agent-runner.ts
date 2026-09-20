@@ -135,6 +135,9 @@ export function buildRuntimeHeader(runtime: RuntimeContext): string {
 	}
 	lines.push("- Keep findings on disk; do not keep important state only in conversation memory.");
 	lines.push(
+		`- Stay inside ${runtime.cwd}. If a file this prompt names is missing, treat it as empty and continue — never search outside the target repository for it.`,
+	);
+	lines.push(
 		"- If blocked, write a short failure note to your assigned output path and exit cleanly.",
 	);
 	if (runtime.notes && runtime.notes.length > 0) {
