@@ -172,6 +172,27 @@ export const FLAG_ENV_MAPPINGS = [
 		description: "Max concurrent background sub-agents (Swarm Burst Cap; default: 3)",
 	},
 	{
+		flag: "plm-bash-timeout",
+		env: "PIOLIUM_BASH_TIMEOUT_MS",
+		description: "Sub-agent bash default timeout in ms (default: 900000 / 15m)",
+	},
+	{
+		flag: "plm-bash-timeout-max",
+		env: "PIOLIUM_BASH_TIMEOUT_MAX_MS",
+		description:
+			"Sub-agent bash max timeout in ms, clamps the model's own value (default: 3600000 / 1h)",
+	},
+	{
+		flag: "plm-bash-blocklist",
+		env: "PIOLIUM_BASH_BLOCKLIST",
+		description: "Extra sub-agent bash blocklist regexes, newline-separated, added to the defaults",
+	},
+	{
+		flag: "plm-bash-guard",
+		env: "PIOLIUM_BASH_GUARD",
+		description: "Set 0/false to disable the sub-agent bash command blocklist (default on)",
+	},
+	{
 		flag: "plm-knowledge-base",
 		env: "PIOLIUM_KNOWLEDGE_BASE",
 		description: "Path to a markdown file or docs dir to ingest as untrusted KB input",

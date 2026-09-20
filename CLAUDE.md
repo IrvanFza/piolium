@@ -61,6 +61,8 @@ A separate retry layer in `index.ts#runCommandWithRetry` wraps the entire slash-
 
 Phases delegate work to specialist sub-agents via `runAgent`, which spawns a child Pi session **in-process** through `createAgentSession` (not a `pi --mode json` subprocess). This means auth, model registry, and resource discovery are inherited from the parent. Each run gets a transcript dir at `<cwd>/piolium/tmp/piolium/runs/<runId>/` containing `prompt.md`, `transcript.jsonl`, `result.md`, and (on failure) `error.txt`.
 
+Child sessions load with `noExtensions: true`, so an extension-level `pi.on("tool_call")` hook never fires for them and the builtin `bash` can't be policed from the extension layer. Instead the runner registers a guarded `bash` in `customTools` (`tools/bash-guard.ts`) — a same-named custom tool shadows the builtin in the child's registry. It adds a default command timeout (`--plm-bash-timeout`, 15m) plus a whole-filesystem/destructive blocklist enforced in a `BashSpawnHook` (`--plm-bash-blocklist`, `--plm-bash-guard 0` to disable). Without it an unbounded command hangs the phase forever: most phases pass no `timeoutMs`, so nothing else ever fires the abort.
+
 The runner does **not** enforce concurrency — call sites schedule through `scheduler.ts`, a tiny FIFO with a hard `maxConcurrent` cap (default 3, matching Deep mode's "Swarm Burst Cap"; override via `--plm-max-agents` / `PIOLIUM_MAX_AGENTS`, resolved per-run by `resolveBurstCap()`). Per-task `AbortSignal` and timeout propagate cleanly.
 
 ### Sub-agent definitions (`agents/`)

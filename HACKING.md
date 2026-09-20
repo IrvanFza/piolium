@@ -293,8 +293,25 @@ Useful session flags:
 - `--plm-longshot-limit`: maximum files for `/piolium-longshot`.
 - `--plm-longshot-timeout`: per-file longshot timeout in milliseconds.
 - `--plm-longshot-langs`: comma-separated language allowlist.
+- `--plm-bash-timeout`: sub-agent bash default timeout in milliseconds.
+- `--plm-bash-blocklist`: extra sub-agent bash blocklist regexes.
 
 Command-local arguments win over session flags.
+
+## Sub-agent Bash Guard
+
+Sub-agents run in child SDK sessions with no extensions and no permission prompt, so their `bash` tool is guarded at the spawn point instead (`extensions/piolium/tools/bash-guard.ts`, registered as a `customTools` entry that shadows the builtin `bash`).
+
+| Guard | Default | CLI flag |
+| --- | --- | --- |
+| Command timeout when the model omits one | `900000` ms, 15 m | `--plm-bash-timeout` |
+| Ceiling on a model-supplied timeout | `3600000` ms, 1 h | `--plm-bash-timeout-max` |
+| Extra blocklist regexes (newline-separated) | none | `--plm-bash-blocklist` |
+| Guard enabled | on | `--plm-bash-guard 0` |
+
+The built-in blocklist rejects whole-filesystem scans (`find /`, `grep -r … /usr`, `ls -R ~`) and host-destructive commands (`rm -rf /`, `mkfs`, raw writes to `/dev/sd*`, fork bombs, `reboot`). A rejected command returns an error to the sub-agent, which can then re-scope it to the audited repository.
+
+This is defense in depth, not a sandbox — it will not stop a deliberately adversarial command. Untrusted repositories still belong in a sandboxed working directory.
 
 ## Retry Behavior
 

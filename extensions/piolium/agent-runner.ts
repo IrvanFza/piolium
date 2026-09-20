@@ -30,6 +30,7 @@ import {
 	DefaultResourceLoader,
 	type ModelRegistry,
 	SessionManager,
+	SettingsManager,
 	type ToolDefinition,
 	createAgentSession,
 	getAgentDir,
@@ -38,6 +39,7 @@ import type { AgentDefinition } from "./agents.ts";
 import type { AuditMode } from "./audit-state.ts";
 import { getBundledSkillsDir } from "./bundled-resources.ts";
 import { ensureRunDir } from "./scheduler.ts";
+import { createGuardedBashTool } from "./tools/bash-guard.ts";
 import { WEB_TOOLS } from "./tools/web-tools.ts";
 
 export interface RuntimeContext {
@@ -237,7 +239,24 @@ export async function runAgent(options: RunAgentOptions): Promise<RunAgentResult
 	});
 	await resourceLoader.reload();
 
-	const childCustomTools: ToolDefinition[] = [...WEB_TOOLS];
+	// Shared with the session below so the guarded bash tool runs the same shell
+	// the builtin would have: `createBashToolDefinition` gets `shellPath` and
+	// `commandPrefix` from settings, and shadowing the builtin would otherwise
+	// silently drop both.
+	const settingsManager = SettingsManager.create(options.runtime.cwd, getAgentDir());
+	const childCustomTools: ToolDefinition[] = [
+		...WEB_TOOLS,
+		// Shadows the builtin `bash` to add a default timeout and a
+		// whole-filesystem/destructive command blocklist. Child sessions run with
+		// `noExtensions`, so this call site is the only place they can be guarded.
+		// Filtered out automatically for agents that don't declare `bash`.
+		createGuardedBashTool(options.runtime.cwd, {
+			...(settingsManager.getShellPath() ? { shellPath: settingsManager.getShellPath() } : {}),
+			...(settingsManager.getShellCommandPrefix()
+				? { commandPrefix: settingsManager.getShellCommandPrefix() }
+				: {}),
+		}),
+	];
 
 	const allowedTools = options.agent.allowedTools;
 	const { session } = await createAgentSession({
@@ -248,6 +267,7 @@ export async function runAgent(options: RunAgentOptions): Promise<RunAgentResult
 		...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
 		tools: allowedTools,
 		sessionManager: SessionManager.inMemory(),
+		settingsManager,
 		resourceLoader,
 		customTools: childCustomTools,
 		...(allowedTools.length === 0 ? { noTools: "all" as const } : {}),
