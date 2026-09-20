@@ -171,9 +171,17 @@ function writeVersion(next: string): void {
 		return;
 	}
 	const raw = readFileSync(PKG_PATH, "utf8");
-	const updated = raw.replace(/("version"\s*:\s*")[^"]+(")/, `$1${next}$2`);
-	if (updated === raw) throw new Error(`failed to rewrite "version" in ${PKG_PATH}`);
-	writeFileSync(PKG_PATH, updated);
+	const versionLine = /("version"\s*:\s*")([^"]+)(")/;
+	const current = versionLine.exec(raw)?.[2];
+	if (current === undefined) throw new Error(`no "version" field found in ${PKG_PATH}`);
+	// Already at the target: a retry after a publish that reported success but
+	// never landed on the registry. Treating the no-op rewrite as a failure
+	// made the run un-retryable at exactly the moment a retry was needed.
+	if (current === next) {
+		step(`package.json already at version ${next}`);
+		return;
+	}
+	writeFileSync(PKG_PATH, raw.replace(versionLine, `$1${next}$3`));
 	step(`wrote version ${next} to package.json (not committed)`);
 }
 
