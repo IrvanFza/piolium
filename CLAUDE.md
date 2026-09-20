@@ -79,6 +79,8 @@ Durable resumable state lives at `<cwd>/piolium/audit-state.json`. **Snake-case 
 
 `attack-surface/` (durable context, recon/KB/SAST/probe summaries), `findings-draft/` (candidates), `findings/<id>-<slug>/` (final, with `draft.md`/`poc.*`/`evidence/`/`report.md`), `final-audit-report.md`, `confirm-workspace/`, `tmp/piolium/runs/<runId>/`. Deep P17 removes transient workspaces after verification. Full table in `docs/output-structure.md`.
 
+Operator custom instructions (`--instructions` / `--plm-instructions`, `--instructions-file`, or `piolium/INSTRUCTIONS.md` in the target repo) resolve in `custom-instructions.ts` and are injected by `buildRuntimeHeader` in `agent-runner.ts`. That header is the one funnel every phase of every mode passes through — add nothing per-mode. The header also states the bounds on what instructions may do; keep them, or a checked-in file can disable the audit's own contract.
+
 Maintainers may also check in `piolium/KNOWLEDGE-BASE.md` (legacy name `piolium/INFO.md` still honored) — a hand-curated, authoritative project-context file the `knowledge-base-builder` agent inlines. Presence is surfaced to sub-agents via `PIOLIUM_KNOWLEDGE_BASE_AVAILABLE`, set per command in `parseCommandTargetOrNotify` through `applyKnowledgeBaseAvailableEnv` (`knowledge-base-file.ts`). This is *trusted* Tier-0 context, distinct from the *untrusted* external-doc corpus staged by `knowledge-base-input.ts`.
 
 ## Conventions

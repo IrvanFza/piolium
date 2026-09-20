@@ -38,6 +38,11 @@ import {
 import type { AgentDefinition } from "./agents.ts";
 import type { AuditMode } from "./audit-state.ts";
 import { getBundledSkillsDir } from "./bundled-resources.ts";
+import {
+	type CustomInstructions,
+	formatCustomInstructionsBlock,
+	resolveCustomInstructions,
+} from "./custom-instructions.ts";
 import { ensureRunDir } from "./scheduler.ts";
 import { createGuardedBashTool } from "./tools/bash-guard.ts";
 import { WEB_TOOLS } from "./tools/web-tools.ts";
@@ -55,6 +60,12 @@ export interface RuntimeContext {
 	outputPaths?: string[];
 	/** Free-form notes appended to the runtime header (e.g. "git unavailable"). */
 	notes?: string[];
+	/**
+	 * Operator instructions to inline. Omit to resolve them from the
+	 * environment and `cwd` — every mode gets them for free that way, which is
+	 * why no mode runner threads this through. Pass `null` to suppress.
+	 */
+	instructions?: CustomInstructions | null;
 }
 
 export interface RunAgentOptions {
@@ -144,6 +155,15 @@ export function buildRuntimeHeader(runtime: RuntimeContext): string {
 		lines.push("");
 		lines.push("Operator notes:");
 		for (const note of runtime.notes) lines.push(`- ${note}`);
+	}
+	// Resolved here rather than threaded through each mode runner: this header
+	// is the one funnel every phase of every mode passes through.
+	const instructions =
+		runtime.instructions === undefined
+			? resolveCustomInstructions(runtime.cwd)
+			: runtime.instructions;
+	if (instructions) {
+		lines.push(...formatCustomInstructionsBlock(instructions));
 	}
 	return lines.join("\n");
 }

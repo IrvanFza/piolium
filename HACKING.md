@@ -295,8 +295,24 @@ Useful session flags:
 - `--plm-longshot-langs`: comma-separated language allowlist.
 - `--plm-bash-timeout`: sub-agent bash default timeout in milliseconds.
 - `--plm-bash-blocklist`: extra sub-agent bash blocklist regexes.
+- `--plm-instructions`: custom instructions for every sub-agent.
+- `--plm-instructions-file`: path to a custom-instructions file.
 
 Command-local arguments win over session flags.
+
+## Custom Instructions
+
+Operator instructions are resolved once per command and injected into the runtime header that `agent-runner.ts` prepends to every sub-agent system prompt. That header is the single funnel every phase of every mode passes through, so no mode runner threads the value — see `custom-instructions.ts`.
+
+| Source | Env var | Precedence |
+| --- | --- | --- |
+| `--instructions` / `--plm-instructions` | `PIOLIUM_INSTRUCTIONS` | 1 |
+| `--instructions-file` / `--plm-instructions-file` | `PIOLIUM_INSTRUCTIONS_FILE` | 2 |
+| `piolium/INSTRUCTIONS.md` in the target repo | — | 3 |
+
+Text is capped at 8000 characters, since the header is prepended to every phase's prompt rather than one call. A named file that cannot be read is a command error, not a silent fallback to the repo default.
+
+Instructions are operator-authored Tier-0 context, inlined verbatim like `KNOWLEDGE-BASE.md`. Because they land in every system prompt, the header states their bounds: they set language, format, emphasis, and environment assumptions, but cannot skip phases or suppress findings. Without that bound, a stray "skip the auth review" in a checked-in file would quietly hollow out every future run.
 
 ## Sub-agent Bash Guard
 

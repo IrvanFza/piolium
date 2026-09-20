@@ -39,6 +39,12 @@ import {
 	readRepeatedOptionValues,
 } from "./command-target.ts";
 import { type PioliumConsoleStream, createPioliumConsoleStream } from "./console-stream.ts";
+import {
+	CUSTOM_INSTRUCTIONS_ENV,
+	CUSTOM_INSTRUCTIONS_FILE_ENV,
+	missingInstructionsFile,
+	resolveCustomInstructions,
+} from "./custom-instructions.ts";
 import { type ExportFormat, normalizeExportSeverity, runExport } from "./export-results.ts";
 import {
 	PHASE_HEARTBEAT_UI_COLOR,
@@ -170,6 +176,17 @@ export const FLAG_ENV_MAPPINGS = [
 		flag: "plm-max-agents",
 		env: "PIOLIUM_MAX_AGENTS",
 		description: "Max concurrent background sub-agents (Swarm Burst Cap; default: 3)",
+	},
+	{
+		flag: "plm-instructions",
+		env: "PIOLIUM_INSTRUCTIONS",
+		description: "Custom instructions for every sub-agent (e.g. report language, target environment)",
+	},
+	{
+		flag: "plm-instructions-file",
+		env: "PIOLIUM_INSTRUCTIONS_FILE",
+		description:
+			"Path to a custom-instructions file; defaults to piolium/INSTRUCTIONS.md in the target repo",
 	},
 	{
 		flag: "plm-bash-timeout",
@@ -666,7 +683,7 @@ function notifyCommandError(
 
 function parseCommandTargetOrNotify(
 	args: string,
-	ctx: { cwd: string; ui: { notify: (text: string, level: "error") => void } },
+	ctx: { cwd: string; ui: { notify: (text: string, level: "error" | "info") => void } },
 	consoleStream: PioliumConsoleStream,
 	pi: ExtensionAPI,
 ): ReturnType<typeof parsePioliumCommandArgs> | undefined {
@@ -678,10 +695,51 @@ function parseCommandTargetOrNotify(
 		return undefined;
 	}
 	applyPioliumProcessFlagEnv(pi);
+	// Command-local `--instructions` / `--instructions-file` win over the
+	// session flag, matching how `--since` overrides `--plm-since`. Applied
+	// here so every /piolium-* command picks them up from one place.
+	applyCustomInstructionsArgs(parsed.tokens);
+	const missingFile = missingInstructionsFile(parsed.cwd);
+	if (missingFile) {
+		notifyCommandError(ctx, consoleStream, `Cannot read instructions file ${missingFile}.`);
+		return undefined;
+	}
+	const instructions = resolveCustomInstructions(parsed.cwd);
+	if (instructions) {
+		// Instructions reshape every sub-agent prompt, so say so rather than
+		// letting an audit silently run under a stale INSTRUCTIONS.md.
+		ctx.ui.notify(
+			`Custom instructions active (${instructions.source})${instructions.truncated ? ", truncated" : ""}.`,
+			"info",
+		);
+	}
 	// Surface curated-context (KNOWLEDGE-BASE.md / legacy INFO.md) presence to
 	// in-process sub-agents via PIOLIUM_KNOWLEDGE_BASE_AVAILABLE.
 	applyKnowledgeBaseAvailableEnv(parsed.cwd);
 	return parsed;
+}
+
+/**
+ * Mirror command-local instruction args into the environment sub-agents read.
+ * Clears the opposite source so a later command cannot inherit the previous
+ * one — slash commands run repeatedly in one long-lived Pi session.
+ */
+export function applyCustomInstructionsArgs(tokens: readonly string[]): void {
+	const inline =
+		readOptionValue(tokens, "--instructions") ?? readOptionValue(tokens, "--plm-instructions");
+	const file =
+		readOptionValue(tokens, "--instructions-file") ??
+		readOptionValue(tokens, "--plm-instructions-file");
+
+	if (inline) {
+		process.env[CUSTOM_INSTRUCTIONS_ENV] = inline;
+		delete process.env[CUSTOM_INSTRUCTIONS_FILE_ENV];
+		return;
+	}
+	if (file) {
+		process.env[CUSTOM_INSTRUCTIONS_FILE_ENV] = file;
+		delete process.env[CUSTOM_INSTRUCTIONS_ENV];
+	}
 }
 
 function registerPioliumFlags(pi: ExtensionAPI): void {

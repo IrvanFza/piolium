@@ -123,6 +123,18 @@ const CLI_FLAGS: FlagHelp[] = [
 		example: 'pi --plm-since abc123 -p "/piolium-diff"',
 	},
 	{
+		flag: '--plm-instructions "<text>"',
+		does:
+			"Custom instructions every sub-agent follows — report language, target environment, emphasis. Also usable per command as --instructions.",
+		example: 'pi --plm-instructions "Write all reports in Chinese" -p "/piolium-deep"',
+	},
+	{
+		flag: "--plm-instructions-file <path>",
+		does:
+			"Reads custom instructions from a file. Defaults to piolium/INSTRUCTIONS.md in the target repo when present.",
+		example: 'pi --plm-instructions-file ./audit-prefs.md -p "/piolium-deep"',
+	},
+	{
 		flag: "--plm-scan-limit <N>",
 		does: "Caps history-aware phases to N commits. Default: 500.",
 		example: 'pi --plm-scan-limit 250 -p "/piolium-deep"',
@@ -252,6 +264,12 @@ export function buildPioliumHelpLines(): string[] {
 		"",
 		"Command-local arguments win over session flags.",
 		'Example: pi --plm-dir /repo-a -p "/piolium-balanced /repo-b --fresh" audits /repo-b.',
+		"",
+		"Custom instructions:",
+		'  Every /piolium-* command accepts --instructions="<text>" or --instructions-file=<path>.',
+		"  A piolium/INSTRUCTIONS.md in the target repo is picked up automatically.",
+		'  Example: /piolium-deep ../repo --instructions="Write reports in Chinese; this is an intranet-only service"',
+		"  Instructions steer language, format, and emphasis — they never skip phases or suppress findings.",
 	);
 
 	return lines;

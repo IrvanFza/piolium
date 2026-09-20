@@ -77,6 +77,27 @@ Or start an interactive `pi` session and type a command such as:
 
 Most commands accept an optional target directory as the first argument.
 
+## Custom instructions
+
+Every `/piolium-*` command accepts custom instructions that reach all sub-agents in every phase — use them to set the reporting language, describe the deployment environment, or steer emphasis:
+
+```text
+/piolium-deep ../target-repo --instructions="Write all reports in Chinese"
+/piolium-deep ../target-repo --instructions="Intranet-only service behind SSO; weight the threat model for an authenticated internal attacker"
+```
+
+Three ways to supply them, highest precedence first:
+
+| Source | How |
+| --- | --- |
+| Inline | `--instructions="<text>"` per command, or `pi --plm-instructions "<text>"` for the session |
+| Named file | `--instructions-file=<path>`, or `pi --plm-instructions-file <path>` |
+| Repo default | Check `piolium/INSTRUCTIONS.md` into the target repo — picked up automatically |
+
+Instructions steer language, format, emphasis, and environment assumptions. They do not relax the audit: every phase still runs, findings are still verified against source, and none are omitted or downgraded because of an instruction.
+
+For authoritative project context — trust boundaries, auth primitives, known false-positive sources — use `piolium/KNOWLEDGE-BASE.md` instead; it is inlined into the knowledge base rather than treated as a directive.
+
 ## Providers
 
 Piolium runs on whatever provider your Pi session is configured for. It also bundles an `anthropic-vertex` provider for running Claude through Google Vertex AI, registered only when Vertex is configured — any `GOOGLE_CLOUD_*` / `ANTHROPIC_VERTEX_PROJECT_ID` env var enables it, or set `PIOLIUM_VERTEX=1` to force it on (`PIOLIUM_VERTEX=0` to hide it). See [HACKING.md](HACKING.md#claude-on-vertex) for details.
