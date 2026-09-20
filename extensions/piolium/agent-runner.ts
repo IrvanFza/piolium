@@ -189,8 +189,15 @@ export function resolveAgentModel(
 	let matches: Model<Api>[];
 	if (AGENT_MODEL_FAMILIES.has(normalized)) {
 		matches = available.filter((model) => {
-			const searchable = `${model.provider} ${model.id} ${model.name ?? ""}`.toLowerCase();
-			return searchable.includes(normalized);
+			// `haiku`/`sonnet`/`opus` name Claude families, so require a Claude
+			// model. Matching the family word anywhere in provider+id+name would
+			// route an audit agent to, say, `openrouter/haiku-poet-13b` whenever
+			// no real Claude model is authenticated — worse than the parent model
+			// this otherwise falls back to.
+			const id = model.id.toLowerCase();
+			const name = (model.name ?? "").toLowerCase();
+			const isClaude = id.includes("claude") || name.includes("claude");
+			return isClaude && (id.includes(normalized) || name.includes(normalized));
 		});
 	} else {
 		matches = available.filter((model) => {

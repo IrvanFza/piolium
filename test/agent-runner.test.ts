@@ -48,6 +48,22 @@ describe("resolveAgentModel", () => {
 
 		expect(resolveAgentModel("sonnet", parent, registry)).toBe(parent);
 	});
+
+	it("does not route a family alias to a non-Claude model that merely shares the word", () => {
+		const parent = fakeModel("openai", "gpt-5");
+		const impostor = fakeModel("openrouter", "some/haiku-poet-13b", "Haiku Poet 13B");
+		const registry = fakeRegistry([parent, impostor]);
+
+		expect(resolveAgentModel("haiku", parent, registry)).toBe(parent);
+	});
+
+	it("still matches a Claude model whose family appears only in its display name", () => {
+		const parent = fakeModel("openai", "gpt-5");
+		const claude = fakeModel("bedrock", "anthropic.claude-opus-5-v1", "Claude Opus 5");
+		const registry = fakeRegistry([parent, claude]);
+
+		expect(resolveAgentModel("opus", parent, registry)).toBe(claude);
+	});
 });
 
 describe("buildRuntimeHeader", () => {

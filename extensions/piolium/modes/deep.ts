@@ -53,7 +53,11 @@ import { runCandidateScanAsync } from "../candidate-scan.ts";
 import { listFindingDirs, promoteDraftsByPrefix } from "../findings.ts";
 import { ingestKnowledgeBaseForRun } from "../knowledge-base-input.ts";
 import { runReconAsync } from "../recon.ts";
-import { readPositiveIntEnv } from "../retry.ts";
+import {
+	findNonRetryableRejection,
+	isNonRetryableAgentError,
+	readPositiveIntEnv,
+} from "../retry.ts";
 import { Scheduler } from "../scheduler.ts";
 import {
 	CONFIRM_AGENT_PHASES,
@@ -467,6 +471,10 @@ async function runFanout3(
 		),
 	);
 	scheduler.dispose();
+	// A refusal inside the fan-out is otherwise flattened to a boolean, so the
+	// command-level retry never learns the run cannot succeed.
+	const nonRetryable = findNonRetryableRejection(settled);
+	if (nonRetryable) throw nonRetryable.reason;
 	return { failed: settled.some((r) => r.status === "rejected") };
 }
 
@@ -589,10 +597,13 @@ async function runPerFinding(
 	);
 	scheduler.dispose();
 	const failed = settled.some((r) => r.status === "rejected");
+	const nonRetryable = findNonRetryableRejection(settled);
 	await applyPhaseStatus(cwd, audit, phase, {
 		status: failed ? "failed" : "complete",
 		...(failed ? { error: `Some per-finding ${phase} runs failed.` } : {}),
 	});
+	// Thrown after the status write so the phase stays resumable.
+	if (nonRetryable) throw nonRetryable.reason;
 	return { failed };
 }
 
@@ -897,6 +908,7 @@ export async function runDeepAudit(opts: RunDeepOptions): Promise<RunDeepResult>
 	};
 
 	let failed = false;
+	let nonRetryableError: unknown;
 	const want = (name: string) => shouldRun(name, opts.only);
 
 	const runSequential = async (name: string, fn: () => Promise<void>) => {
@@ -904,9 +916,13 @@ export async function runDeepAudit(opts: RunDeepOptions): Promise<RunDeepResult>
 		ensurePrereqs(audit, name);
 		try {
 			await fn();
-		} catch {
+		} catch (err) {
 			failed = true;
-			throw new Error(`Phase ${name} failed`);
+			// Re-throwing a fresh Error would discard the provider's text, and
+			// `isNonRetryableAgentError` classifies on exactly that text — a policy
+			// refusal would look like an ordinary failure and burn full command
+			// retries of the longest pipeline. Preserve it via `cause`.
+			throw new Error(`Phase ${name} failed`, { cause: err });
 		}
 	};
 
@@ -1026,8 +1042,9 @@ export async function runDeepAudit(opts: RunDeepOptions): Promise<RunDeepResult>
 				if (r.failed) failed = true;
 			}
 		}
-	} catch {
+	} catch (err) {
 		failed = true;
+		if (isNonRetryableAgentError(err)) nonRetryableError = err;
 	}
 
 	await markAuditStatus(cwd, audit.audit_id, failed ? "failed" : "complete");
@@ -1040,5 +1057,9 @@ export async function runDeepAudit(opts: RunDeepOptions): Promise<RunDeepResult>
 		}
 	}
 	ui?.notify?.(failed ? "Deep audit failed." : "Deep audit complete.", failed ? "error" : "info");
+	// Thrown only after state is persisted and the operator notified, so the
+	// audit stays resumable. Reaches runCommandWithRetry, which skips the three
+	// command-level retries a policy refusal can never satisfy.
+	if (nonRetryableError) throw nonRetryableError;
 	return { auditId: audit.audit_id, status: failed ? "failed" : "complete", phases };
 }

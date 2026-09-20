@@ -341,6 +341,8 @@ Piolium records retry metadata in `piolium/audit-state.json`. Retry counts are r
 
 Provider policy refusals that explicitly flag cybersecurity content are treated as non-retryable: repeating an unchanged phase prompt cannot succeed and only wastes requests. The phase still records the refusal in `audit-state.json` so the operator can resume with another model.
 
+Classification walks the error's `cause` chain, because orchestrators wrap a phase failure in their own error before it reaches the command-level retry. A mode that catches phase errors must preserve the original as `cause` and re-throw a recognised refusal after writing audit state — otherwise the refusal is flattened into a boolean and the whole command is retried anyway. Refusals detected inside a `Promise.allSettled` fan-out go through `findNonRetryableRejection`.
+
 Example:
 
 ```bash
@@ -432,7 +434,8 @@ Sub-agents under `agents/` are package-private because Pi has no first-class `ag
 - Canonical phase order is in `extensions/piolium/modes/modes.ts`.
 - Per-phase retry, state transitions, and heartbeat tracking are owned by `extensions/piolium/modes/phase-runner.ts`.
 - Sub-agents run through `extensions/piolium/agent-runner.ts`, which creates child Pi sessions in-process with `createAgentSession`.
-- Agent frontmatter model families (`haiku`, `sonnet`, `opus`) resolve against authenticated Pi models. Resolution prefers the parent's provider when it offers that family, then direct Anthropic and Anthropic Vertex, and selects the newest matching model. Unresolvable declarations fall back to the parent model.
+- Agent frontmatter model families (`haiku`, `sonnet`, `opus`) resolve against authenticated Pi models. Resolution prefers the parent's provider when it offers that family, then direct Anthropic and Anthropic Vertex, and selects the newest matching model. Unresolvable declarations fall back to the parent model. A family alias only ever matches a Claude model, so an unrelated model whose name happens to contain `haiku` cannot capture the routing.
+- Provider preference outranks version, so a Vertex parent keeps the audit on Vertex even when a newer model of the same family exists on direct Anthropic. That is deliberate — auth, quota, and billing locality matter more than a point release — but it means the resolved model can be older than the newest one available. `prompt.md` records both the requested and resolved model for every run.
 - Agent runs write transcripts to `<target>/piolium/tmp/piolium/runs/<runId>/` and record both requested and resolved models in `prompt.md`.
 - Durable state lives at `<target>/piolium/audit-state.json`.
 - File writes to audit state should go through helpers in `extensions/piolium/audit-state.ts`.

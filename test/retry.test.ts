@@ -62,7 +62,7 @@ describe("runWithRetry", () => {
 });
 
 describe("isNonRetryableAgentError", () => {
-	it("recognizes the Codex cybersecurity policy refusal", () => {
+	it("recognizes a provider cybersecurity policy refusal", () => {
 		expect(
 			isNonRetryableAgentError(new Error("This content was flagged for possible cybersecurity risk.")),
 		).toBe(true);
@@ -80,6 +80,23 @@ describe("isNonRetryableAgentError", () => {
 		];
 
 		expect(findNonRetryableRejection(results)?.reason).toBe(policyError);
+	});
+
+	it("sees through an orchestrator's wrapper error", () => {
+		// deep.ts rethrows `Phase P5 failed` with the provider error as `cause`;
+		// classifying only the outer message would miss every refusal.
+		const refusal = new Error("This content was flagged for possible cybersecurity risk.");
+		const wrapped = new Error("Phase P5 failed", { cause: refusal });
+
+		expect(isNonRetryableAgentError(wrapped)).toBe(true);
+		expect(isNonRetryableAgentError(new Error("Phase P5 failed"))).toBe(false);
+	});
+
+	it("survives a self-referential cause chain", () => {
+		const looped = new Error("Phase P5 failed");
+		looped.cause = looped;
+
+		expect(isNonRetryableAgentError(looped)).toBe(false);
 	});
 });
 

@@ -47,10 +47,26 @@ const NON_RETRYABLE_AGENT_ERROR_PATTERNS = [
 	/join the Trusted Access for Cyber program/i,
 ];
 
-/** Provider policy refusals are deterministic for an unchanged phase prompt. */
+/** Depth cap so a self-referential `cause` chain cannot spin. */
+const MAX_CAUSE_DEPTH = 10;
+
+/**
+ * Provider policy refusals are deterministic for an unchanged phase prompt.
+ *
+ * Walks the `cause` chain: orchestrators wrap a phase failure in their own
+ * error (`Phase P5 failed`) before it reaches the command-level retry, so
+ * classifying only the outermost message would miss every refusal that did not
+ * happen to surface at the top.
+ */
 export function isNonRetryableAgentError(err: unknown): boolean {
-	const message = errorMessage(err);
-	return NON_RETRYABLE_AGENT_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+	let current = err;
+	for (let depth = 0; depth < MAX_CAUSE_DEPTH; depth++) {
+		const message = errorMessage(current);
+		if (NON_RETRYABLE_AGENT_ERROR_PATTERNS.some((pattern) => pattern.test(message))) return true;
+		if (!(current instanceof Error) || current.cause === undefined) return false;
+		current = current.cause;
+	}
+	return false;
 }
 
 export function findNonRetryableRejection(
