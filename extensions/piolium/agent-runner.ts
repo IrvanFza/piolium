@@ -63,9 +63,9 @@ export interface RuntimeContext {
 	/**
 	 * Operator instructions to inline. Omit to resolve them from the
 	 * environment and `cwd` — every mode gets them for free that way, which is
-	 * why no mode runner threads this through. Pass `null` to suppress.
+	 * why no mode runner threads this through.
 	 */
-	instructions?: CustomInstructions | null;
+	instructions?: CustomInstructions;
 }
 
 export interface RunAgentOptions {
@@ -234,10 +234,7 @@ export function buildRuntimeHeader(runtime: RuntimeContext): string {
 	}
 	// Resolved here rather than threaded through each mode runner: this header
 	// is the one funnel every phase of every mode passes through.
-	const instructions =
-		runtime.instructions === undefined
-			? resolveCustomInstructions(runtime.cwd)
-			: runtime.instructions;
+	const instructions = runtime.instructions ?? resolveCustomInstructions(runtime.cwd);
 	if (instructions) {
 		lines.push(...formatCustomInstructionsBlock(instructions));
 	}
@@ -328,8 +325,15 @@ export async function runAgent(options: RunAgentOptions): Promise<RunAgentResult
 		options.onEvent?.(event);
 	};
 
+	// One settings load, shared by the loader, the guarded bash tool, and the
+	// session. Each SettingsManager.create() takes a lockfile and reads both
+	// scopes synchronously on the parent's event loop, so building three per
+	// spawn is worth avoiding across a 40-spawn audit.
+	const settingsManager = SettingsManager.create(options.runtime.cwd, getAgentDir());
+
 	const resourceLoader = new DefaultResourceLoader({
 		cwd: options.runtime.cwd,
+		settingsManager,
 		agentDir: getAgentDir(),
 		systemPrompt: composedSystemPrompt,
 		additionalSkillPaths: [getBundledSkillsDir()],
@@ -341,11 +345,11 @@ export async function runAgent(options: RunAgentOptions): Promise<RunAgentResult
 	});
 	await resourceLoader.reload();
 
-	// Shared with the session below so the guarded bash tool runs the same shell
-	// the builtin would have: `createBashToolDefinition` gets `shellPath` and
-	// `commandPrefix` from settings, and shadowing the builtin would otherwise
-	// silently drop both.
-	const settingsManager = SettingsManager.create(options.runtime.cwd, getAgentDir());
+	// The guarded bash tool must run the same shell the builtin would have:
+	// `createBashToolDefinition` gets `shellPath` and `commandPrefix` from
+	// settings, and shadowing the builtin would otherwise silently drop both.
+	const shellPath = settingsManager.getShellPath();
+	const commandPrefix = settingsManager.getShellCommandPrefix();
 	const childCustomTools: ToolDefinition[] = [
 		...WEB_TOOLS,
 		// Shadows the builtin `bash` to add a default timeout and a
@@ -353,10 +357,8 @@ export async function runAgent(options: RunAgentOptions): Promise<RunAgentResult
 		// `noExtensions`, so this call site is the only place they can be guarded.
 		// Filtered out automatically for agents that don't declare `bash`.
 		createGuardedBashTool(options.runtime.cwd, {
-			...(settingsManager.getShellPath() ? { shellPath: settingsManager.getShellPath() } : {}),
-			...(settingsManager.getShellCommandPrefix()
-				? { commandPrefix: settingsManager.getShellCommandPrefix() }
-				: {}),
+			...(shellPath ? { shellPath } : {}),
+			...(commandPrefix ? { commandPrefix } : {}),
 		}),
 	];
 

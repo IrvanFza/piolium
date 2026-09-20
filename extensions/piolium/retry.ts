@@ -30,6 +30,21 @@ export function readNonNegativeIntEnv(name: string, fallback: number): number {
 	return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
+/**
+ * Read a boolean env var. Accepts `1/true/yes/on` and `0/false/no/off`
+ * case-insensitively; anything else falls back.
+ *
+ * Shared so the accepted spellings stay the same across flags — they had
+ * already drifted between the toggles that each rolled their own.
+ */
+export function readBooleanEnv(name: string, fallback: boolean): boolean {
+	const raw = process.env[name]?.trim();
+	if (!raw) return fallback;
+	if (/^(1|true|yes|on)$/i.test(raw)) return true;
+	if (/^(0|false|no|off)$/i.test(raw)) return false;
+	return fallback;
+}
+
 /** Read a trimmed non-empty string env var, or `undefined` when unset/blank. */
 export function readTrimmedEnv(name: string): string | undefined {
 	const raw = process.env[name];

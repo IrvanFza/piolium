@@ -81,6 +81,8 @@ Durable resumable state lives at `<cwd>/piolium/audit-state.json`. **Snake-case 
 
 Operator custom instructions (`--instructions` / `--plm-instructions`, `--instructions-file`, or `piolium/INSTRUCTIONS.md` in the target repo) resolve in `custom-instructions.ts` and are injected by `buildRuntimeHeader` in `agent-runner.ts`. That header is the one funnel every phase of every mode passes through — add nothing per-mode. The header also states the bounds on what instructions may do; keep them, or a checked-in file can disable the audit's own contract.
 
+**Cross-cutting behavior belongs in `runAgent`/`buildRuntimeHeader` (per sub-agent) or `runAgentPhase` (per phase), never in individual mode runners.** Anything keyed off a hardcoded phase id in a mode runner is a bug waiting to happen — phase ids differ per mode, so the next mode silently misses it. Two things already work this way: `phase-runner` seeds an agent's maybe-missing inputs by consulting `REGISTRY_READER_AGENTS` (keyed off the agent, since reading `attack-pattern-registry.json` is a property of the agent, not of where a mode schedules it), and it records `non_retryable` on the phase row so `runCommandWithRetry` can skip retries no refusal will satisfy.
+
 Maintainers may also check in `piolium/KNOWLEDGE-BASE.md` (legacy name `piolium/INFO.md` still honored) — a hand-curated, authoritative project-context file the `knowledge-base-builder` agent inlines. Presence is surfaced to sub-agents via `PIOLIUM_KNOWLEDGE_BASE_AVAILABLE`, set per command in `parseCommandTargetOrNotify` through `applyKnowledgeBaseAvailableEnv` (`knowledge-base-file.ts`). This is *trusted* Tier-0 context, distinct from the *untrusted* external-doc corpus staged by `knowledge-base-input.ts`.
 
 ## Conventions

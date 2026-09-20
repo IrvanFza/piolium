@@ -35,7 +35,8 @@ import {
 	createBashToolDefinition,
 	createLocalBashOperations,
 } from "@earendil-works/pi-coding-agent";
-import { readPositiveIntEnv, readTrimmedEnv } from "../retry.ts";
+import { tokenizeCommandArgs } from "../command-target.ts";
+import { readBooleanEnv, readPositiveIntEnv, readTrimmedEnv } from "../retry.ts";
 
 /** Applied when the model omits `timeout`. 15 min is well past any sane repo-scoped command. */
 export const DEFAULT_BASH_TIMEOUT_MS = 15 * 60 * 1000;
@@ -87,6 +88,13 @@ const OPT_IN_RECURSIVE = new Set(["grep", "egrep", "fgrep", "ls", "cp", "chmod",
 
 const RECURSIVE_FLAG = /^-(?:-recursive$|[a-zA-Z]*[rR])/;
 
+/**
+ * Targets that make a recursive `rm` catastrophic. A superset of ROOT_PATHS:
+ * `.` and `..` must not go in ROOT_PATHS itself, or the allowed
+ * `find . -name '*.ts'` would be blocked as a whole-filesystem scan.
+ */
+const DESTRUCTIVE_RM_TARGETS = new Set([...ROOT_PATHS, ".", "./", "..", "../"]);
+
 /** Whole-command patterns whose danger is in the literal text, not the path arguments. */
 const LITERAL_RULES: ReadonlyArray<{ id: string; pattern: RegExp; reason: string }> = [
 	{
@@ -114,11 +122,6 @@ const LITERAL_RULES: ReadonlyArray<{ id: string; pattern: RegExp; reason: string
 		pattern: /\b(?:shutdown|reboot|halt|poweroff)\b|\binit\s+[06]\b/,
 		reason: "host power control",
 	},
-	{
-		id: "swap-cwd",
-		pattern: /\brm\s+(?:-[^\s]+\s+)*(?:\.|\.\/)\s*(?:$|[;&|])/,
-		reason: "recursive delete of the working directory",
-	},
 ];
 
 export interface BashGuardViolation {
@@ -137,12 +140,6 @@ function splitSegments(command: string): string[] {
 		.split(/\n|;|&&|\|\||\||&/)
 		.map((segment) => segment.trim())
 		.filter((segment) => segment.length > 0);
-}
-
-/** Tokenize loosely, stripping the quoting a shell would remove. */
-function tokenize(segment: string): string[] {
-	const tokens = segment.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [];
-	return tokens.map((token) => token.replace(/["']/g, ""));
 }
 
 /**
@@ -168,22 +165,25 @@ function commandWord(tokens: string[]): { name: string; args: string[] } | undef
 }
 
 function hasRecursiveFlag(args: string[]): boolean {
-	return args.some((arg) => arg.startsWith("-") && RECURSIVE_FLAG.test(arg));
+	return args.some((arg) => RECURSIVE_FLAG.test(arg));
 }
 
-function rootPathArg(args: string[]): string | undefined {
-	return args.find((arg) => !arg.startsWith("-") && ROOT_PATHS.has(arg));
+function rootPathArg(
+	args: string[],
+	targets: ReadonlySet<string> = ROOT_PATHS,
+): string | undefined {
+	return args.find((arg) => targets.has(arg));
 }
 
 function checkSegment(segment: string): BashGuardViolation | undefined {
-	const parsed = commandWord(tokenize(segment));
+	const parsed = commandWord(tokenizeCommandArgs(segment));
 	if (!parsed) return undefined;
 	const { name, args } = parsed;
 
 	// `rm -rf /` and friends. Checked before the scan rules because the reason
 	// we report should say "destructive", not "whole-filesystem scan".
 	if (name === "rm" && hasRecursiveFlag(args)) {
-		const target = rootPathArg(args);
+		const target = rootPathArg(args, DESTRUCTIVE_RM_TARGETS);
 		if (target) {
 			return { rule: "destructive-rm", reason: `recursive delete of ${target}` };
 		}
@@ -219,23 +219,38 @@ function operatorRules(): RegExp[] {
 	return rules;
 }
 
-export function isBashGuardEnabled(): boolean {
-	const raw = readTrimmedEnv(GUARD_ENV);
-	if (!raw) return true;
-	return !/^(0|false|no|off)$/i.test(raw);
+function isBashGuardEnabled(): boolean {
+	return readBooleanEnv(GUARD_ENV, true);
 }
 
 /**
  * Decide whether a command is blocked. Exported so the policy is testable
  * without spawning a shell.
  */
-export function checkBashCommand(command: string): BashGuardViolation | undefined {
-	if (!isBashGuardEnabled()) return undefined;
+export interface BashGuardPolicy {
+	enabled: boolean;
+	operatorRules: RegExp[];
+}
+
+/**
+ * Snapshot the env-derived guard policy. Resolved once per tool rather than
+ * once per command: the operator blocklist is immutable for the tool's life,
+ * matching how the timeout policy is already resolved.
+ */
+export function resolveBashGuardPolicy(): BashGuardPolicy {
+	return { enabled: isBashGuardEnabled(), operatorRules: operatorRules() };
+}
+
+export function checkBashCommand(
+	command: string,
+	policy: BashGuardPolicy = resolveBashGuardPolicy(),
+): BashGuardViolation | undefined {
+	if (!policy.enabled) return undefined;
 
 	for (const rule of LITERAL_RULES) {
 		if (rule.pattern.test(command)) return { rule: rule.id, reason: rule.reason };
 	}
-	for (const pattern of operatorRules()) {
+	for (const pattern of policy.operatorRules) {
 		if (pattern.test(command)) {
 			return {
 				rule: "operator-blocklist",
@@ -296,8 +311,9 @@ export function withBashTimeout(base: BashOperations, policy: BashTimeoutPolicy)
 }
 
 export function createBashGuardSpawnHook(): (context: BashSpawnContext) => BashSpawnContext {
+	const policy = resolveBashGuardPolicy();
 	return (context) => {
-		const violation = checkBashCommand(context.command);
+		const violation = checkBashCommand(context.command, policy);
 		if (!violation) return context;
 		throw new Error(
 			[

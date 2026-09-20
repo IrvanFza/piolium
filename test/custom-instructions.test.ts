@@ -9,8 +9,8 @@ import {
 	CUSTOM_INSTRUCTIONS_FILE,
 	CUSTOM_INSTRUCTIONS_FILE_ENV,
 	CUSTOM_INSTRUCTIONS_MAX_CHARS,
-	missingInstructionsFile,
 	resolveCustomInstructions,
+	resolveInstructions,
 } from "../extensions/piolium/custom-instructions.ts";
 import { applyCustomInstructionsArgs } from "../extensions/piolium/index.ts";
 
@@ -89,13 +89,16 @@ describe("resolveCustomInstructions", () => {
 		writeRepoInstructions("from repo default");
 		process.env[CUSTOM_INSTRUCTIONS_FILE_ENV] = join(cwd, "nope.md");
 		expect(resolveCustomInstructions(cwd)).toBeUndefined();
-		expect(missingInstructionsFile(cwd)).toContain("nope.md");
+
+		const resolved = resolveInstructions(cwd);
+		expect(resolved.kind).toBe("missing-file");
+		expect(resolved.kind === "missing-file" && resolved.path).toContain("nope.md");
 	});
 
 	it("reports no missing file when inline text is set", () => {
 		process.env[CUSTOM_INSTRUCTIONS_ENV] = "inline";
 		process.env[CUSTOM_INSTRUCTIONS_FILE_ENV] = join(cwd, "nope.md");
-		expect(missingInstructionsFile(cwd)).toBeUndefined();
+		expect(resolveInstructions(cwd).kind).toBe("ok");
 	});
 });
 
@@ -149,9 +152,14 @@ describe("runtime header injection", () => {
 		expect(header).not.toContain("Operator instructions");
 	});
 
-	it("honours an explicit null override", () => {
-		process.env[CUSTOM_INSTRUCTIONS_ENV] = "should not appear";
-		const header = buildRuntimeHeader({ cwd, mode: "lite", instructions: null });
-		expect(header).not.toContain("should not appear");
+	it("prefers an explicitly supplied value over the environment", () => {
+		process.env[CUSTOM_INSTRUCTIONS_ENV] = "from env";
+		const header = buildRuntimeHeader({
+			cwd,
+			mode: "lite",
+			instructions: { text: "explicit", source: "caller", truncated: false },
+		});
+		expect(header).toContain("explicit");
+		expect(header).not.toContain("from env");
 	});
 });

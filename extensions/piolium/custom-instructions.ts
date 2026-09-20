@@ -76,47 +76,51 @@ function readInstructionsFile(path: string, cwd: string): string | undefined {
  * in-process and inherit the environment, and command parsing already mirrors
  * every `--plm-*` flag there, so this stays a single source of truth.
  */
-export function resolveCustomInstructions(cwd: string): CustomInstructions | undefined {
-	const inline = readTrimmedEnv(CUSTOM_INSTRUCTIONS_ENV);
-	if (inline) {
-		const { text, truncated } = capText(inline);
-		return { text, source: "--instructions", truncated };
-	}
-
-	const fromFlagFile = readTrimmedEnv(CUSTOM_INSTRUCTIONS_FILE_ENV);
-	if (fromFlagFile) {
-		const contents = readInstructionsFile(fromFlagFile, cwd);
-		if (contents) {
-			const { text, truncated } = capText(contents);
-			return { text, source: fromFlagFile, truncated };
-		}
-		// A path the operator named but that does not resolve is a mistake worth
-		// surfacing, not silently falling back to the repo default.
-		return undefined;
-	}
-
-	const defaultPath = join(cwd, CUSTOM_INSTRUCTIONS_FILE);
-	if (existsSync(defaultPath)) {
-		const contents = readInstructionsFile(defaultPath, cwd);
-		if (contents) {
-			const { text, truncated } = capText(contents);
-			return { text, source: CUSTOM_INSTRUCTIONS_FILE, truncated };
-		}
-	}
-
-	return undefined;
-}
+export type InstructionsResolution =
+	| { kind: "none" }
+	/** The operator named a file that could not be read — worth surfacing, not silently ignoring. */
+	| { kind: "missing-file"; path: string }
+	| { kind: "ok"; instructions: CustomInstructions };
 
 /**
- * Whether the operator named an instructions file that could not be read.
- * Commands use this to warn instead of running an audit the operator believes
- * is customised when it is not.
+ * Resolve the active custom instructions for an audit rooted at `cwd`.
+ *
+ * One function, one read: the command handler needs both "is this file
+ * unreadable?" and "what does it say?", and a second resolver for the former
+ * would encode the precedence rule twice and stat-and-read the same file twice
+ * per command.
+ *
+ * Reads `process.env` rather than taking flags as parameters: sub-agents run
+ * in-process and inherit the environment, and command parsing already mirrors
+ * every `--plm-*` flag there, so this stays a single source of truth.
  */
-export function missingInstructionsFile(cwd: string): string | undefined {
-	if (readTrimmedEnv(CUSTOM_INSTRUCTIONS_ENV)) return undefined;
-	const path = readTrimmedEnv(CUSTOM_INSTRUCTIONS_FILE_ENV);
-	if (!path) return undefined;
-	return readInstructionsFile(path, cwd) === undefined ? path : undefined;
+export function resolveInstructions(cwd: string): InstructionsResolution {
+	const build = (raw: string, source: string): InstructionsResolution => ({
+		kind: "ok",
+		instructions: { ...capText(raw), source },
+	});
+
+	const inline = readTrimmedEnv(CUSTOM_INSTRUCTIONS_ENV);
+	if (inline) return build(inline, "--instructions");
+
+	const named = readTrimmedEnv(CUSTOM_INSTRUCTIONS_FILE_ENV);
+	if (named) {
+		const contents = readInstructionsFile(named, cwd);
+		// Named but unreadable does not fall back to the repo default: the
+		// operator asked for a specific file and should hear that it is missing.
+		return contents ? build(contents, named) : { kind: "missing-file", path: named };
+	}
+
+	// `readInstructionsFile` already answers "absent or unreadable" via its
+	// statSync/try-catch, so no separate existsSync is needed.
+	const fromRepo = readInstructionsFile(join(cwd, CUSTOM_INSTRUCTIONS_FILE), cwd);
+	return fromRepo ? build(fromRepo, CUSTOM_INSTRUCTIONS_FILE) : { kind: "none" };
+}
+
+/** Convenience for the injection point, which only cares about the text. */
+export function resolveCustomInstructions(cwd: string): CustomInstructions | undefined {
+	const resolved = resolveInstructions(cwd);
+	return resolved.kind === "ok" ? resolved.instructions : undefined;
 }
 
 /**

@@ -341,7 +341,7 @@ Piolium records retry metadata in `piolium/audit-state.json`. Retry counts are r
 
 Provider policy refusals that explicitly flag cybersecurity content are treated as non-retryable: repeating an unchanged phase prompt cannot succeed and only wastes requests. The phase still records the refusal in `audit-state.json` so the operator can resume with another model.
 
-Classification walks the error's `cause` chain, because orchestrators wrap a phase failure in their own error before it reaches the command-level retry. A mode that catches phase errors must preserve the original as `cause` and re-throw a recognised refusal after writing audit state — otherwise the refusal is flattened into a boolean and the whole command is retried anyway. Refusals detected inside a `Promise.allSettled` fan-out go through `findNonRetryableRejection`.
+Classification happens once, in `phase-runner.ts`, which records `non_retryable: true` on the phase row alongside the failure. `runCommandWithRetry` reads that back when a mode reports failure as a status rather than an exception — which every mode does, and which `CommandFailedStatus` cannot carry a cause through. One producer, one consumer, every mode: **a mode runner needs no refusal handling of its own.** `isNonRetryableAgentError` additionally walks an error's `cause` chain for the paths where the error object does survive.
 
 Example:
 

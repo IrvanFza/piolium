@@ -42,8 +42,7 @@ import { type PioliumConsoleStream, createPioliumConsoleStream } from "./console
 import {
 	CUSTOM_INSTRUCTIONS_ENV,
 	CUSTOM_INSTRUCTIONS_FILE_ENV,
-	missingInstructionsFile,
-	resolveCustomInstructions,
+	resolveInstructions,
 } from "./custom-instructions.ts";
 import { type ExportFormat, normalizeExportSeverity, runExport } from "./export-results.ts";
 import {
@@ -274,6 +273,26 @@ class CommandFailedStatus<T> extends Error {
 		super(`${label} returned failed status`);
 		this.name = "CommandFailedStatus";
 	}
+}
+
+/**
+ * Whether a mode run failed on a provider policy refusal.
+ *
+ * Mode runners report failure as a status rather than an exception, and
+ * `CommandFailedStatus` carries no cause, so the refusal cannot travel to
+ * `shouldRetry` as an error. `phase-runner` records `non_retryable` on the
+ * phase row instead; reading it back here covers every mode without any of
+ * them re-throwing.
+ */
+function auditHitNonRetryablePhase(cwd: string, result: unknown): boolean {
+	const auditId =
+		result && typeof result === "object" && "auditId" in result
+			? (result as { auditId?: unknown }).auditId
+			: undefined;
+	if (typeof auditId !== "string") return false;
+	const audit = readAuditState(cwd).state?.audits.find((a) => a.audit_id === auditId);
+	if (!audit) return false;
+	return Object.values(audit.phases).some((phase) => phase.non_retryable === true);
 }
 
 function hasFailedStatus(value: unknown): value is { status: "failed" } {
@@ -542,7 +561,7 @@ async function runCommandWithRetry<T>(
 	statusKey: string,
 	ui: CommandUi,
 	operation: (attempt: number, maxAttempts: number) => Promise<T>,
-	options: { retryFailedStatus?: boolean } = {},
+	options: { retryFailedStatus?: boolean; cwd?: string } = {},
 ): Promise<T> {
 	let lastFailedResult: T | undefined;
 	try {
@@ -562,7 +581,15 @@ async function runCommandWithRetry<T>(
 				maxRetries: readNonNegativeIntEnv("PIOLIUM_COMMAND_MAX_RETRIES", 3),
 				backoffBaseMs: readPositiveIntEnv("PIOLIUM_COMMAND_BACKOFF_BASE_MS", 5000),
 				backoffMaxMs: readPositiveIntEnv("PIOLIUM_COMMAND_BACKOFF_MAX_MS", 120_000),
-				shouldRetry: (err) => !isNonRetryableAgentError(err),
+				shouldRetry: (err) => {
+					if (isNonRetryableAgentError(err)) return false;
+					// A mode that reports failure as a status loses the error, so
+					// fall back to the refusal the phase row recorded.
+					if (err instanceof CommandFailedStatus && options.cwd) {
+						return !auditHitNonRetryablePhase(options.cwd, err.result);
+					}
+					return true;
+				},
 				onRetry: (info) => {
 					ui.notify(
 						`${label} attempt ${info.attempt}/${info.maxAttempts} failed; retrying in ${Math.ceil(info.backoffMs / 1000)}s.`,
@@ -705,19 +732,16 @@ function parseCommandTargetOrNotify(
 	// session flag, matching how `--since` overrides `--plm-since`. Applied
 	// here so every /piolium-* command picks them up from one place.
 	applyCustomInstructionsArgs(parsed.tokens);
-	const missingFile = missingInstructionsFile(parsed.cwd);
-	if (missingFile) {
-		notifyCommandError(ctx, consoleStream, `Cannot read instructions file ${missingFile}.`);
+	const instructions = resolveInstructions(parsed.cwd);
+	if (instructions.kind === "missing-file") {
+		notifyCommandError(ctx, consoleStream, `Cannot read instructions file ${instructions.path}.`);
 		return undefined;
 	}
-	const instructions = resolveCustomInstructions(parsed.cwd);
-	if (instructions) {
+	if (instructions.kind === "ok") {
 		// Instructions reshape every sub-agent prompt, so say so rather than
 		// letting an audit silently run under a stale INSTRUCTIONS.md.
-		ctx.ui.notify(
-			`Custom instructions active (${instructions.source})${instructions.truncated ? ", truncated" : ""}.`,
-			"info",
-		);
+		const { source, truncated } = instructions.instructions;
+		ctx.ui.notify(`Custom instructions active (${source})${truncated ? ", truncated" : ""}.`, "info");
 	}
 	// Surface curated-context (KNOWLEDGE-BASE.md / legacy INFO.md) presence to
 	// in-process sub-agents via PIOLIUM_KNOWLEDGE_BASE_AVAILABLE.
@@ -1301,18 +1325,23 @@ export default function pioliumExtension(pi: ExtensionAPI) {
 			phaseUi.setStatus("piolium-lite", "● starting lite audit");
 			await allowInitialUiPaint();
 			try {
-				const result = await runCommandWithRetry("piolium-lite", "piolium-lite", phaseUi, async () =>
-					runLiteAudit({
-						cwd: command.cwd,
-						forceFresh: fresh,
-						agentRuntime: agentRuntimeFromCommandContext(pi, ctx),
-						ui: {
-							notify: phaseUi.notify,
-							setStatus: phaseUi.setStatus,
-							onAgentEvent,
-							onPhaseHeartbeat: phaseUi.onPhaseHeartbeat,
-						},
-					}),
+				const result = await runCommandWithRetry(
+					"piolium-lite",
+					"piolium-lite",
+					phaseUi,
+					async () =>
+						runLiteAudit({
+							cwd: command.cwd,
+							forceFresh: fresh,
+							agentRuntime: agentRuntimeFromCommandContext(pi, ctx),
+							ui: {
+								notify: phaseUi.notify,
+								setStatus: phaseUi.setStatus,
+								onAgentEvent,
+								onPhaseHeartbeat: phaseUi.onPhaseHeartbeat,
+							},
+						}),
+					{ cwd: command.cwd },
 				);
 				const phaseLines = formatCommandPhaseLines(command.cwd, result.auditId, result.phases);
 				await showCommandResult(
@@ -1380,6 +1409,7 @@ export default function pioliumExtension(pi: ExtensionAPI) {
 								onPhaseHeartbeat: phaseUi.onPhaseHeartbeat,
 							},
 						}),
+					{ cwd: command.cwd },
 				);
 				const phaseLines = formatCommandPhaseLines(command.cwd, result.auditId, result.phases);
 				await showCommandResult(
@@ -1444,19 +1474,24 @@ export default function pioliumExtension(pi: ExtensionAPI) {
 			phaseUi.setStatus("piolium-deep", "● starting deep audit");
 			await allowInitialUiPaint();
 			try {
-				const result = await runCommandWithRetry("piolium-deep", "piolium-deep", phaseUi, async () =>
-					runDeepAudit({
-						cwd: command.cwd,
-						forceFresh: fresh,
-						agentRuntime: agentRuntimeFromCommandContext(pi, ctx),
-						...(only.length > 0 ? { only } : {}),
-						ui: {
-							notify: phaseUi.notify,
-							setStatus: phaseUi.setStatus,
-							onAgentEvent,
-							onPhaseHeartbeat: phaseUi.onPhaseHeartbeat,
-						},
-					}),
+				const result = await runCommandWithRetry(
+					"piolium-deep",
+					"piolium-deep",
+					phaseUi,
+					async () =>
+						runDeepAudit({
+							cwd: command.cwd,
+							forceFresh: fresh,
+							agentRuntime: agentRuntimeFromCommandContext(pi, ctx),
+							...(only.length > 0 ? { only } : {}),
+							ui: {
+								notify: phaseUi.notify,
+								setStatus: phaseUi.setStatus,
+								onAgentEvent,
+								onPhaseHeartbeat: phaseUi.onPhaseHeartbeat,
+							},
+						}),
+					{ cwd: command.cwd },
 				);
 				const phaseLines = formatCommandPhaseLines(command.cwd, result.auditId, result.phases);
 				await showCommandResult(
@@ -1550,6 +1585,7 @@ export default function pioliumExtension(pi: ExtensionAPI) {
 								onPhaseHeartbeat: phaseUi.onPhaseHeartbeat,
 							},
 						}),
+					{ cwd: command.cwd },
 				);
 				const phaseLines = formatCommandPhaseLines(effectiveCwd, result.auditId, result.phases);
 				await showCommandResult(
@@ -1593,17 +1629,22 @@ export default function pioliumExtension(pi: ExtensionAPI) {
 			ctx.ui.setStatus("piolium-diff", "● starting diff");
 			await allowInitialUiPaint();
 			try {
-				const result = await runCommandWithRetry("piolium-diff", "piolium-diff", ctx.ui, async () =>
-					runDiffAudit({
-						cwd: command.cwd,
-						agentRuntime: agentRuntimeFromCommandContext(pi, ctx),
-						...(since ? { since } : {}),
-						ui: {
-							notify: (text, level) => ctx.ui.notify(text, level),
-							setStatus: (key, text) => ctx.ui.setStatus(key, text),
-							onAgentEvent,
-						},
-					}),
+				const result = await runCommandWithRetry(
+					"piolium-diff",
+					"piolium-diff",
+					ctx.ui,
+					async () =>
+						runDiffAudit({
+							cwd: command.cwd,
+							agentRuntime: agentRuntimeFromCommandContext(pi, ctx),
+							...(since ? { since } : {}),
+							ui: {
+								notify: (text, level) => ctx.ui.notify(text, level),
+								setStatus: (key, text) => ctx.ui.setStatus(key, text),
+								onAgentEvent,
+							},
+						}),
+					{ cwd: command.cwd },
 				);
 				await showCommandResult(
 					ctx,
@@ -1669,6 +1710,7 @@ export default function pioliumExtension(pi: ExtensionAPI) {
 								onPhaseHeartbeat: phaseUi.onPhaseHeartbeat,
 							},
 						}),
+					{ cwd: command.cwd },
 				);
 				const phaseLines = formatCommandPhaseLines(command.cwd, result.auditId, result.phases);
 				await showCommandResult(
@@ -1722,18 +1764,23 @@ export default function pioliumExtension(pi: ExtensionAPI) {
 			phaseUi.setStatus("piolium-merge", "● starting merge");
 			await allowInitialUiPaint();
 			try {
-				const result = await runCommandWithRetry("piolium-merge", "piolium-merge", phaseUi, async () =>
-					runMergeAudit({
-						cwd: command.cwd,
-						sources: dirs,
-						agentRuntime: agentRuntimeFromCommandContext(pi, ctx),
-						ui: {
-							notify: phaseUi.notify,
-							setStatus: phaseUi.setStatus,
-							onAgentEvent,
-							onPhaseHeartbeat: phaseUi.onPhaseHeartbeat,
-						},
-					}),
+				const result = await runCommandWithRetry(
+					"piolium-merge",
+					"piolium-merge",
+					phaseUi,
+					async () =>
+						runMergeAudit({
+							cwd: command.cwd,
+							sources: dirs,
+							agentRuntime: agentRuntimeFromCommandContext(pi, ctx),
+							ui: {
+								notify: phaseUi.notify,
+								setStatus: phaseUi.setStatus,
+								onAgentEvent,
+								onPhaseHeartbeat: phaseUi.onPhaseHeartbeat,
+							},
+						}),
+					{ cwd: command.cwd },
 				);
 				await showCommandResult(
 					ctx,
@@ -1796,6 +1843,7 @@ export default function pioliumExtension(pi: ExtensionAPI) {
 								onPhaseHeartbeat: phaseUi.onPhaseHeartbeat,
 							},
 						}),
+					{ cwd: command.cwd },
 				);
 				const phaseLines = formatCommandPhaseLines(command.cwd, result.auditId, result.phases);
 				await showCommandResult(
@@ -1889,6 +1937,7 @@ export default function pioliumExtension(pi: ExtensionAPI) {
 								onPhaseHeartbeat: phaseUi.onPhaseHeartbeat,
 							},
 						}),
+					{ cwd: command.cwd },
 				);
 				const phaseLines = formatCommandPhaseLines(command.cwd, result.auditId, result.phases);
 				await showCommandResult(
@@ -1971,6 +2020,7 @@ export default function pioliumExtension(pi: ExtensionAPI) {
 								onPhaseHeartbeat: phaseUi.onPhaseHeartbeat,
 							},
 						}),
+					{ cwd: command.cwd },
 				);
 				const phaseLines = formatCommandPhaseLines(command.cwd, result.auditId, result.phases);
 				await showCommandResult(

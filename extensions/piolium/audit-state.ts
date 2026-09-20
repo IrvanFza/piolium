@@ -10,9 +10,10 @@
  * intra-process write-write races and partially-written files on crash.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { backupCorruptFile, writeFileAtomic } from "./atomic-file.ts";
 import { phasesFor } from "./modes.ts";
 import { formatPhaseDetailLabel } from "./phase-labels.ts";
 
@@ -66,6 +67,13 @@ export interface PhaseState {
 	last_tool?: string;
 	last_tool_summary?: string;
 	run_id?: string;
+	/**
+	 * Set when the phase failed on a provider policy refusal. Recorded rather
+	 * than only thrown because the command-level retry sits behind a mode
+	 * runner that reports failure as a status, not an exception — see
+	 * `runCommandWithRetry`.
+	 */
+	non_retryable?: boolean;
 }
 
 export interface AuditRunState {
@@ -149,11 +157,7 @@ function isAuditStateFile(value: unknown): value is AuditStateFile {
  * mutations within the same process serialize correctly.
  */
 function writeAuditStateRaw(path: string, state: AuditStateFile): void {
-	mkdirSync(dirname(path), { recursive: true });
-	const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-	const json = `${JSON.stringify(state, null, "\t")}\n`;
-	writeFileSync(tmp, json);
-	renameSync(tmp, path);
+	writeFileAtomic(path, `${JSON.stringify(state, null, "\t")}\n`);
 }
 
 /**
@@ -190,24 +194,8 @@ function readAuditStateOrEmpty(path: string): AuditStateFile {
 	// the expected shape. Audit state is expensive and resumable, so never let
 	// the caller overwrite it blind: move the corrupt file aside first, then
 	// return empty so a fresh file is written alongside the preserved backup.
-	backupCorruptStateFile(path);
+	backupCorruptFile(path);
 	return { audits: [] };
-}
-
-/**
- * Move a corrupt state file to `audit-state.json.corrupt-<timestamp>` so a
- * subsequent write doesn't destroy whatever audit history it held. Best-effort:
- * if the rename fails we leave the file in place rather than risk losing it.
- */
-function backupCorruptStateFile(path: string): void {
-	const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-	let backup = `${path}.corrupt-${stamp}`;
-	for (let n = 1; existsSync(backup); n++) backup = `${path}.corrupt-${stamp}-${n}`;
-	try {
-		renameSync(path, backup);
-	} catch {
-		// Leave the original untouched if it can't be moved.
-	}
 }
 
 /** Most recent audit by `started_at` (ISO timestamps sort lexically). */

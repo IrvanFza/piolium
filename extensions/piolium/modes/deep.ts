@@ -40,7 +40,6 @@ import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } f
 import { join } from "node:path";
 import type { AgentRuntimeModel } from "../agent-runner.ts";
 import { type AgentDefinition, loadAgents } from "../agents.ts";
-import { ensureAttackPatternRegistry } from "../attack-pattern-registry.ts";
 import {
 	type AuditRunState,
 	applyPhaseStatus,
@@ -908,7 +907,6 @@ export async function runDeepAudit(opts: RunDeepOptions): Promise<RunDeepResult>
 	};
 
 	let failed = false;
-	let nonRetryableError: unknown;
 	const want = (name: string) => shouldRun(name, opts.only);
 
 	const runSequential = async (name: string, fn: () => Promise<void>) => {
@@ -977,12 +975,6 @@ export async function runDeepAudit(opts: RunDeepOptions): Promise<RunDeepResult>
 			await runSequential("P9", () =>
 				runOne(cwd, audit, spec("P9"), recon.historyAvailable, signal, ui, opts.agentRuntime),
 			);
-			// P10 writes the cross-chamber pattern registry and P12 reads it as its
-			// primary input, but a chamber that confirms no new pattern leaves the
-			// file uncreated — and P10's gate checks the chamber index, not the
-			// registry. Seed it so P12 never hunts for a file that was never
-			// written. Re-seeded before P12 in case P10 removed it.
-			ensureAttackPatternRegistry(cwd);
 			await runSequential("P10", () =>
 				runOne(cwd, audit, spec("P10"), recon.historyAvailable, signal, ui, opts.agentRuntime),
 			);
@@ -993,7 +985,6 @@ export async function runDeepAudit(opts: RunDeepOptions): Promise<RunDeepResult>
 			await runSequential("P11", () =>
 				runOne(cwd, audit, spec("P11"), recon.historyAvailable, signal, ui, opts.agentRuntime),
 			);
-			ensureAttackPatternRegistry(cwd);
 			await runSequential("P12", () =>
 				runOne(cwd, audit, spec("P12"), recon.historyAvailable, signal, ui, opts.agentRuntime),
 			);
@@ -1042,9 +1033,8 @@ export async function runDeepAudit(opts: RunDeepOptions): Promise<RunDeepResult>
 				if (r.failed) failed = true;
 			}
 		}
-	} catch (err) {
+	} catch {
 		failed = true;
-		if (isNonRetryableAgentError(err)) nonRetryableError = err;
 	}
 
 	await markAuditStatus(cwd, audit.audit_id, failed ? "failed" : "complete");
@@ -1057,9 +1047,5 @@ export async function runDeepAudit(opts: RunDeepOptions): Promise<RunDeepResult>
 		}
 	}
 	ui?.notify?.(failed ? "Deep audit failed." : "Deep audit complete.", failed ? "error" : "info");
-	// Thrown only after state is persisted and the operator notified, so the
-	// audit stays resumable. Reaches runCommandWithRetry, which skips the three
-	// command-level retries a policy refusal can never satisfy.
-	if (nonRetryableError) throw nonRetryableError;
 	return { auditId: audit.audit_id, status: failed ? "failed" : "complete", phases };
 }

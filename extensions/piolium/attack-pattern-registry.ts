@@ -22,8 +22,9 @@
  * who deletes it mid-audit.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { backupCorruptFile, writeFileAtomic } from "./atomic-file.ts";
 
 export const ATTACK_PATTERN_REGISTRY = "piolium/attack-pattern-registry.json";
 
@@ -35,12 +36,8 @@ export function getAttackPatternRegistryPath(cwd: string): string {
 	return join(cwd, ATTACK_PATTERN_REGISTRY);
 }
 
-/** Atomic write, matching the temp-file-rename discipline used for audit-state. */
 function writeRegistryRaw(path: string, registry: AttackPatternRegistry): void {
-	mkdirSync(dirname(path), { recursive: true });
-	const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-	writeFileSync(tmp, `${JSON.stringify(registry, null, "\t")}\n`);
-	renameSync(tmp, path);
+	writeFileAtomic(path, `${JSON.stringify(registry, null, "\t")}\n`);
 }
 
 /**
@@ -62,7 +59,20 @@ function isUsableRegistry(path: string): boolean {
 	}
 }
 
-export type EnsureRegistryResult = "present" | "seeded" | "repaired";
+/**
+ * Agents that read the registry. Keyed by agent rather than by phase id
+ * because reading it is a property of the agent, not of where a mode happens
+ * to schedule it: `chamber-synthesizer` runs in deep P10, revisit R7/R8,
+ * balanced L5 and merge M2, and pinning the seed to phase ids silently missed
+ * the last two. `phase-runner` consults this for every mode.
+ */
+export const REGISTRY_READER_AGENTS = new Set([
+	"chamber-synthesizer",
+	"variant-hunter",
+	"variant-scout",
+	"attack-ideator",
+	"report-assembler",
+]);
 
 /**
  * Guarantee a readable `attack-pattern-registry.json` exists, seeding an empty
@@ -75,21 +85,11 @@ export type EnsureRegistryResult = "present" | "seeded" | "repaired";
  * confirmed patterns is worth preserving for post-mortem even when it can no
  * longer be parsed.
  */
-export function ensureAttackPatternRegistry(cwd: string): EnsureRegistryResult {
+export function ensureAttackPatternRegistry(cwd: string): void {
 	const path = getAttackPatternRegistryPath(cwd);
-
+	if (isUsableRegistry(path)) return;
 	if (existsSync(path)) {
-		if (isUsableRegistry(path)) return "present";
-		try {
-			renameSync(path, `${path}.corrupt-${Date.now()}`);
-		} catch {
-			// Can't preserve it — overwriting is still better than leaving a
-			// corrupt registry for the variant phase to choke on.
-		}
-		writeRegistryRaw(path, { patterns: [] });
-		return "repaired";
+		backupCorruptFile(path);
 	}
-
 	writeRegistryRaw(path, { patterns: [] });
-	return "seeded";
 }

@@ -141,3 +141,20 @@ describe("bash timeout policy", () => {
 		expect(seen).toEqual([900, 3600]);
 	});
 });
+
+describe("tokenizer reuse", () => {
+	it("blocks a root scan that hides the slash behind a shell escape", () => {
+		// The previous local tokenizer left `\/` intact, so this slipped the
+		// guard; the shared tokenizeCommandArgs resolves the escape.
+		expect(checkBashCommand("find \\/ -name x")?.rule).toBe("whole-filesystem-scan");
+	});
+
+	it("blocks a recursive delete of the working directory", () => {
+		expect(checkBashCommand("rm -rf .")?.rule).toBe("destructive-rm");
+		expect(checkBashCommand("rm -rf ./ -v")?.rule).toBe("destructive-rm");
+	});
+
+	it("still allows a repo-scoped recursive find", () => {
+		expect(checkBashCommand("find . -name '*.ts'")).toBeUndefined();
+	});
+});

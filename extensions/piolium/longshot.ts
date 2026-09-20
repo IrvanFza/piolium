@@ -23,6 +23,7 @@ import {
 } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { writeFileAtomic } from "./atomic-file.ts";
 import { readCandidateScores } from "./candidate-scan.ts";
 
 export interface LongshotTarget {
@@ -469,20 +470,13 @@ export async function mutateLongshotTargets(
 		const current = readLongshotTargets(cwd);
 		const next = transform(current);
 		if (!next) return current;
-		writeAtomic(path, `${JSON.stringify(next, null, "\t")}\n`);
+		writeFileAtomic(path, `${JSON.stringify(next, null, "\t")}\n`);
 		return next;
 	});
 }
 
-function writeAtomic(path: string, content: string): void {
-	mkdirSync(dirname(path), { recursive: true });
-	const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-	writeFileSync(tmp, content);
-	renameSync(tmp, path);
-}
-
 export function writeLongshotTargets(cwd: string, file: LongshotTargetsFile): void {
-	writeAtomic(longshotTargetsPath(cwd), `${JSON.stringify(file, null, "\t")}\n`);
+	writeFileAtomic(longshotTargetsPath(cwd), `${JSON.stringify(file, null, "\t")}\n`);
 }
 
 export interface UpdateTargetStatusOptions {

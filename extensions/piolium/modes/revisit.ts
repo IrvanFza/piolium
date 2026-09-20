@@ -23,7 +23,6 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentRuntimeModel } from "../agent-runner.ts";
 import { loadAgents } from "../agents.ts";
-import { ensureAttackPatternRegistry } from "../attack-pattern-registry.ts";
 import {
 	type AuditRunState,
 	initAudit,
@@ -230,13 +229,6 @@ export async function runRevisitAudit(opts: RunRevisitOptions): Promise<RunRevis
 
 	let failed = false;
 	for (const name of ["R0", "R5", "R7", "R8", "R9", "R10", "R10k", "R11", "R11b", "R11c"] as const) {
-		// R7/R8 write the cross-chamber pattern registry and R10/R10k read it as
-		// their primary input. A chamber round that confirms no new pattern
-		// leaves it uncreated, so seed it before each phase rather than letting
-		// the variant hunter go looking for a file that was never written.
-		if (name === "R7" || name === "R8" || name === "R10" || name === "R10k") {
-			ensureAttackPatternRegistry(cwd);
-		}
 		try {
 			await runAgentPhase({
 				cwd,

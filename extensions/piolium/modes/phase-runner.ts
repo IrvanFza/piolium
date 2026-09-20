@@ -9,6 +9,7 @@ import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { type AgentRunError, type AgentRuntimeModel, runAgent } from "../agent-runner.ts";
 import type { RuntimeContext } from "../agent-runner.ts";
 import type { AgentDefinition } from "../agents.ts";
+import { REGISTRY_READER_AGENTS, ensureAttackPatternRegistry } from "../attack-pattern-registry.ts";
 import { type AuditRunState, applyPhaseStatus } from "../audit-state.ts";
 import {
 	DEFAULT_HEARTBEAT_INTERVAL_MS,
@@ -164,6 +165,14 @@ export async function runAgentPhase(opts: RunAgentPhaseOptions): Promise<void> {
 			try {
 				emitHeartbeat();
 				heartbeatTimer = setInterval(emitHeartbeat, HEARTBEAT_INTERVAL_MS);
+				// Materialize the maybe-missing inputs this agent reads before it
+				// runs. Keyed by agent rather than by phase id, so every mode gets
+				// it — pinning the seed to phase ids in each mode runner silently
+				// missed balanced L5 and merge M2.
+				if (REGISTRY_READER_AGENTS.has(agent.name)) {
+					ensureAttackPatternRegistry(cwd);
+				}
+
 				await runAgent({
 					agent,
 					task: opts.task,
@@ -224,6 +233,11 @@ export async function runAgentPhase(opts: RunAgentPhaseOptions): Promise<void> {
 							: attempt >= maxAttempts && maxRetries > 0
 								? `Failed after ${maxRetries} retries: ${message}`
 								: message,
+						// Recorded so the command-level retry can see the refusal
+						// through a mode runner that reports failure as a status
+						// rather than an exception. One producer, one consumer —
+						// no mode needs to re-throw for this to work.
+						...(nonRetryable ? { non_retryable: true } : {}),
 						attempt,
 						max_attempts: maxAttempts,
 						retry_backoff_ms: null,

@@ -563,7 +563,6 @@ export async function runBalancedAudit(opts: RunBalancedOptions): Promise<RunBal
 	const reportAssembler = agents.get("report-assembler");
 
 	let failed = false;
-	let nonRetryableError: unknown;
 
 	try {
 		// L1
@@ -716,9 +715,8 @@ export async function runBalancedAudit(opts: RunBalancedOptions): Promise<RunBal
 			const r = await runBalancedVerificationCleanup(cwd, audit, ui, signal);
 			if (r.failed) failed = true;
 		}
-	} catch (err) {
+	} catch {
 		failed = true;
-		if (isNonRetryableAgentError(err)) nonRetryableError = err;
 	}
 
 	await markAuditStatus(cwd, audit.audit_id, failed ? "failed" : "complete");
@@ -734,6 +732,5 @@ export async function runBalancedAudit(opts: RunBalancedOptions): Promise<RunBal
 		failed ? "Balanced audit failed." : "Balanced audit complete.",
 		failed ? "error" : "info",
 	);
-	if (nonRetryableError) throw nonRetryableError;
 	return { auditId: audit.audit_id, status: failed ? "failed" : "complete", phases };
 }
